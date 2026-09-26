@@ -1,0 +1,8 @@
+srga
+srga.exe
+/data/
+*.db
+*.db-wal
+*.db-shm
+*.gz
+sitemap*.xml

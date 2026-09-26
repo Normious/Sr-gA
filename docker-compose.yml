@@ -1,0 +1,24 @@
+services:
+  srga:
+    build: .
+    container_name: srga
+    restart: unless-stopped
+    ports:
+      - "4017:4017"
+    environment:
+      - ENV=production
+      - PORT=4017
+      - DATABASE_PATH=/data/srga.db
+      - LOG_LEVEL=info
+      - MAX_URLS_PER_REQUEST=50000
+      - MAX_URLS_FOR_VALIDATION=500
+      - VALIDATION_USER_AGENT=Sr-gA-Validator/1.0 (+https://github.com/Normious/Sr-gA)
+    volumes:
+      - srga_data:/data
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+volumes:
+  srga_data:
