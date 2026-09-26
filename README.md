@@ -1,116 +1,174 @@
-# Sr-gA: sitemap and robots.txt generator API
+# Sr-gA — Day 26
 
-Sr-gA is a single-binary Go service that generates spec-compliant `sitemap.xml` files, sitemap indexes, and `robots.txt` files, with concurrent URL validation and usage analytics. You send it URLs as JSON, it returns XML or plain text, and it records every operation per API key. The Docker image is 10.1 MB and starts in about 30 ms.
+[![Go](https://img.shields.io/badge/Go-1.22-00ADD8)](https://go.dev) [![SQLite](https://img.shields.io/badge/SQLite-pure_Go-blue)](https://modernc.org/sqlite) [![Docker](https://img.shields.io/badge/Docker-scratch_10MB-2496ED)](https://www.docker.com) [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
-## What it does
+**Local:** `http://localhost:4017` — `GET /` → `{"service":"Sr-gA","version":"1.0.0"}` | `GET /health` → `{"service":"Sr-gA — Sitemap/robots.txt Service","status":"ok"}`
 
-Sr-gA exposes eight endpoints behind per-project API keys:
+Centralized sitemap + robots.txt generator with concurrent URL validation. **Go 1.22 + net/http + pure-Go SQLite**. Ops tooling for the 30 Services challenge.
 
-- `POST /sitemap/generate`: build a `sitemap.xml` from a URL list, with optional gzip output
-- `POST /sitemap/index`: build a `sitemapindex.xml` that references multiple sitemap files
-- `POST /robots/generate`: build a `robots.txt` from user-agent rules, sitemap URLs, and host
-- `POST /urls/validate`: check up to 500 URLs concurrently and report status codes
-- `POST /urls/discover`: import URLs by fetching an existing sitemap, following indexes
-- `GET /history`: paged log of past operations for your project
-- `GET /stats`: daily rollups, totals, cache hit rate, and per-operation counts
-- `GET /health`: unauthenticated liveness check with cache stats
+> **Docs:** [Interactive Architecture](docs/diagrams/srga-architecture.html) • [Architecture](docs/ARCHITECTURE.md) • [API](docs/API.md) • [ADRs](docs/adr/) • [TDS](Sr-gA.md)
 
-Results pass through a two-layer cache. Identical requests return `X-Sr-gA-Cache: memory` or `X-Sr-gA-Cache: sqlite` instead of regenerating output. See [ARCHITECTURE](docs/ARCHITECTURE.md) for the cache design and [API reference](docs/API.md) for every field.
+## Architecture — Interactive + Big Preview
 
-## Run it in 60 seconds
+[![Sr-gA Architecture — 2048×1320](docs/diagrams/srga-architecture.visual-check.2048x1320.light.png)](docs/diagrams/srga-architecture.html)
 
-You need Go 1.22 or newer. Clone the repo, copy the example environment file, and start the server:
+> **Big preview** (2048×1320 light — 148 KB) — click for interactive pan/zoom + guided views + light/dark + PNG export. Also available: [dark variant](docs/diagrams/srga-architecture.visual-check.2048x1320.dark.png) & [1440×900 light](docs/diagrams/srga-architecture.visual-check.1440x900.light.png). Full showcase: 9/9 checks, 0 errors.
 
-```bash
-git clone https://github.com/Normious/Sr-gA
-cd Sr-gA
-cp .env.example .env
-go run ./cmd/srga
+## Stack
+- **Language:** Go 1.22 (static binary, no runtime)
+- **Router:** `net/http` stdlib pattern routing (no chi)
+- **XML:** `encoding/xml` stdlib (+ manual `<?xml?>` header)
+- **DB:** SQLite via `modernc.org/sqlite` (pure Go, no CGO)
+- **Image:** `FROM scratch` Docker, 10.1 MB, ~30 ms cold start
+
+## Project Structure
+```
+.
+├── cmd/srga/main.go            # routes, middleware chain, graceful shutdown
+├── internal/
+│   ├── config/config.go        # env loading + slog setup
+│   ├── db/db.go                # open, migrate, seed demo keys
+│   ├── db/queries.go           # projects, cache, history, stats
+│   ├── cache/memory.go         # LRU + TTL, mutex-guarded
+│   ├── auth/auth.go            # X-API-Key gate → project in context
+│   ├── sitemap/                # model, generator, robots, validator, discover
+│   ├── handlers/               # one file per endpoint group
+│   └── middleware/middleware.go # recovery, CORS, request logging
+├── migrations/0001_init.sql    # 5 tables + indexes (also baked into image)
+├── docs/
+│   ├── ARCHITECTURE.md         # diagrams + flows + schema
+│   ├── API.md                  # full endpoint spec
+│   ├── adr/                    # 6 architecture decision records
+│   └── diagrams/               # interactive arch HTML + screenshots
+├── docker-compose.yml          # srga + srga_data volume
+├── Dockerfile                  # golang build → scratch
+├── .env.example                # → .env (local, git-ignored)
+├── Sr-gA.md                    # TDS v1.0.0
+└── README.md
 ```
 
-The server listens on port 4017 and seeds three demo projects on first start. Generate your first sitemap with the `shop-a` key:
+## Quick Start (10 mins)
 
 ```bash
+# 1. Run (Go 1.22+)
+go run ./cmd/srga
+# → "Sr-gA listening" on :4017, seeds demo keys on first start
+
+# 2. Smoke test
+curl http://localhost:4017/health
+
+# 3. Generate a sitemap
 curl -X POST http://localhost:4017/sitemap/generate \
   -H "X-API-Key: shop-a-srga-key-2026" \
   -H "Content-Type: application/json" \
-  -d '{"urls": [{"loc": "https://example.com/", "changefreq": "daily", "priority": 1.0}]}'
-```
+  -d '{"urls": [{"loc": "https://example.com/", "priority": 1.0}]}'
 
-You get XML back plus `X-Sr-gA-URL-Count`, `X-Sr-gA-Cache`, and `X-Sr-gA-Duration-Ms` response headers. Repeat the call and the cache header flips from `miss` to `memory`.
-
-## Run it with Docker
-
-Build once, run anywhere with no toolchain on the host:
-
-```bash
+# OR Docker (no toolchain needed)
 docker compose up -d
 curl http://localhost:4017/health
 ```
 
-The compose file mounts the `srga_data` volume at `/data`, so the SQLite database survives container restarts. To stop and keep your data, run `docker compose down`. To rebuild after code changes, run `docker compose up -d --build`.
+## API
 
-## Configuration
+JSON in, XML/text/JSON out. Base: `http://localhost:4017` — full spec in [docs/API.md](docs/API.md). Every endpoint except `/` and `/health` needs `X-API-Key`.
 
-Copy `.env.example` to `.env` and edit values. The `.env` file stays out of git by design; commit changes to `.env.example` instead. Every variable has a working default, so you can also run with an empty environment.
-
-| Variable | Default | Purpose |
-| :--- | :--- | :--- |
-| `PORT` | `4017` | HTTP listen port |
-| `ENV` | `production` | Free-form environment label for logs |
-| `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` (JSON via `log/slog`) |
-| `DATABASE_PATH` | `./data/srga.db` | SQLite file; parent directories are created on start |
-| `MEMORY_CACHE_TTL_SECONDS` | `3600` | In-memory cache entry lifetime |
-| `SQLITE_CACHE_TTL_SECONDS` | `86400` | Persistent cache entry lifetime |
-| `MEMORY_CACHE_MAX_ITEMS` | `500` | In-memory cache capacity before oldest entries are evicted |
-| `MAX_URLS_PER_REQUEST` | `50000` | Largest sitemap request accepted |
-| `MAX_URLS_FOR_VALIDATION` | `500` | Largest validation batch accepted |
-| `MAX_BATCH_VALIDATION_CONCURRENCY` | `50` | Default goroutine pool size for validation |
-| `DEFAULT_VALIDATION_TIMEOUT_SECONDS` | `10` | Per-request HTTP timeout for validation and discovery |
-| `VALIDATION_USER_AGENT` | `Sr-gA-Validator/1.0 (+https://github.com/Normious/Sr-gA)` | User-Agent sent when checking remote URLs |
-| `VALIDATION_MAX_REDIRECTS` | `5` | Redirect limit before a validation fails |
-| `TEMP_DIR` | `./data/tmp` | Scratch directory, created on start |
-
-Demo API keys (`shop-a-srga-key-2026`, `demo-srga-key-2026`, `test-srga-key-2026`) exist for local development only. Create real projects by inserting rows into the `projects` table and rotate the keys before exposing the service.
-
-## Project structure
-
-The layout follows standard Go conventions: `cmd` holds the entrypoint, `internal` holds code that stays inside this module:
-
-```text
-srga/
-├── cmd/srga/main.go            # wiring, routes, graceful shutdown
-├── internal/
-│   ├── config/config.go        # env loading and slog setup
-│   ├── db/db.go                # SQLite open, migrate, seed
-│   ├── db/queries.go           # projects, cache, history, stats
-│   ├── cache/memory.go         # in-memory LRU with TTL
-│   ├── auth/auth.go            # X-API-Key middleware
-│   ├── sitemap/model.go        # XML and JSON types
-│   ├── sitemap/generator.go    # urlset, index, gzip
-│   ├── sitemap/robots.go       # robots.txt builder
-│   ├── sitemap/validator.go    # concurrent HEAD/GET checker
-│   ├── sitemap/discover.go     # remote sitemap importer
-│   ├── handlers/               # one file per endpoint group
-│   └── middleware/middleware.go # recovery, CORS, request logging
-├── migrations/0001_init.sql    # full schema, also baked into the image
-├── docs/                       # architecture, API reference, ADRs
-└── data/                       # local SQLite + temp files (git-ignored)
+### POST /sitemap/generate
+```json
+{ "urls": [{ "loc": "https://shop-a.com/", "changefreq": "daily", "priority": 1.0 }],
+  "pretty_print": true, "compress": false }
 ```
+`200` XML (+ `X-Sr-gA-Cache: miss|memory|sqlite`) | `400` bad URL | `401` bad key
 
-## Testing
+### POST /sitemap/index
+```json
+{ "sitemaps": [{ "loc": "https://shop-a.com/sitemap-products.xml", "lastmod": "2026-09-26" }] }
+```
+`200` index XML | `400` empty list | `401` bad key
 
-Unit tests cover sitemap generation, robots output, and gzip round-trips:
+### POST /robots/generate
+```json
+{ "rules": [{ "user_agent": "*", "allow": ["/"], "disallow": ["/admin/"], "crawl_delay": 10 }],
+  "sitemaps": ["https://shop-a.com/sitemap.xml"], "host": "shop-a.com" }
+```
+`200` robots.txt | `400` no rules | `401` bad key
+
+### POST /urls/validate ⭐ (for other services)
+```json
+{ "urls": ["https://example.com/", "https://example.com/missing"], "concurrency": 20 }
+```
+`200` → `{ total, valid_count, invalid_count, duration_ms, results[] }` | `400` over 500 URLs
+
+### POST /urls/discover
+```json
+{ "sitemap_url": "https://example.com/sitemap.xml", "include_alternates": true }
+```
+`200` → `{ url_count, urls[] }` | `502` fetch failed
+
+### GET /history , GET /stats , GET /health
+`GET /history?operation=sitemap&limit=5` → `{ entries[], pagination }` | `GET /stats?days=7` → `{ daily[], totals, by_operation }` | `GET /health` → `{ status: "ok", cache }` (no key)
+
+## Testing (cURL) — Local
 
 ```bash
-go test ./...
-go vet ./...
+BASE="http://localhost:4017"
+KEY="shop-a-srga-key-2026"
+
+# generate (miss, then memory hit on repeat)
+curl -X POST $BASE/sitemap/generate -H "X-API-Key: $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"urls": [{"loc": "https://shop-a.com/", "priority": 1.0},
+                {"loc": "https://shop-a.com/about", "priority": 0.5}]}'
+
+# gzip output
+curl -X POST $BASE/sitemap/generate -H "X-API-Key: $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"urls": [{"loc": "https://example.com/"}], "compress": true}' \
+  --output sitemap.xml.gz
+
+# robots
+curl -X POST $BASE/robots/generate -H "X-API-Key: $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"rules": [{"user_agent": "*", "disallow": ["/admin/"]}]}'
+
+# validate (against local server)
+curl -X POST $BASE/urls/validate -H "X-API-Key: $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"urls": ["http://localhost:4017/health", "http://localhost:4017/nope-xyz"]}'
+
+# history + stats
+curl "$BASE/history?limit=3" -H "X-API-Key: $KEY"
+curl "$BASE/stats?days=7" -H "X-API-Key: $KEY"
 ```
 
-Endpoint coverage lives in `docs/API.md`, and every example there was executed against a local server and the Docker image before release. To re-run the manual sweep, start the server and work through the API doc top to bottom with the `shop-a` key.
+## Integration (for Shop A, Gig4Gig etc.)
 
-## Further reading
+1. Nightly cron: `POST /sitemap/generate` with product URLs → write body to `sitemap.xml`
+2. Large sites: generate per-section files, then `POST /sitemap/index` to link them
+3. Pre-publish: `POST /urls/validate` with new URLs, ship only `is_valid: true`
+4. Every generation: append `Sitemap: <url>` via `POST /robots/generate`
+5. Repeat identical payloads freely — cache headers (`memory`/`sqlite`) tell you it was free
 
-- `docs/API.md`: full endpoint reference with request and response examples
-- `docs/ARCHITECTURE.md`: system diagram, request flows, schema, and cache design
-- `docs/adr/`: architecture decision records explaining why the stack looks this way
+## Security Notes
+
+- Keys: per-project `X-API-Key` gate, looked up in SQLite, inactive keys rejected
+- Demo keys (`shop-a`/`demo`/`test` `*-srga-key-2026`) are dev-only — insert real projects and rotate before exposing
+- No secrets in repo — `.env` is git-ignored, `.env.example` is the template
+- Validation fetches only URLs you POST; keep the service behind a firewall if exposed
+- `/health` and `/` are intentionally unauthenticated (load-balancer checks)
+
+### Ponytail decisions (skipped → when to add)
+- No chi/gorilla — 1.22 pattern routing covers 8 routes; add when path params needed
+- No mattn/cgo — modernc keeps the scratch image; revisit on write contention
+- No Redis — SQLite cache persists across restarts; add when multi-replica needed
+- No validation result cache — live state re-checked each call; add TTL cache when rpm demands
+
+## Deploy Checklist
+
+- [ ] `.env` configured (or env vars set, `DATABASE_PATH` on a volume)
+- [ ] Demo keys rotated / real projects inserted
+- [ ] `docker compose up -d --build` healthy (`/health` → ok)
+- [ ] Test generate→validate→history→stats flow
+- [ ] Share base URL + API key with consumers
+
+## License
+MIT — reuse for all 30 services.
