@@ -1,5 +1,6 @@
 srga
 srga.exe
+.env
 /data/
 *.db
 *.db-wal
