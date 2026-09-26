@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Sr-gA service architecture",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "serve-path", "label": "Serve path", "focus": ["clients", "api", "sitemap", "memcache", "sqlite"], "note": "A sitemap request travels from callers through cache to durable state." },
+      { "id": "validate-path", "label": "Validate path", "focus": ["api", "validator", "public", "sqlite"], "note": "URL checks fan out to the internet and log back to SQLite." }
+    ]
+  },
+  "components": [
+    { "id": "clients", "type": "external", "label": "Client services", "sublabel": "cron + CMS callers", "pos": [40, 300], "size": [150, 64] },
+    { "id": "api", "type": "backend", "label": "Sr-gA API", "sublabel": "Go net/http :4017", "pos": [280, 300], "size": [150, 64], "tag": "X-API-Key + JSON" },
+    { "id": "sitemap", "type": "backend", "label": "Sitemap engine", "sublabel": "encoding/xml · gzip", "pos": [520, 300], "size": [150, 64] },
+    { "id": "validator", "type": "backend", "label": "URL validator", "sublabel": "goroutine pool x50", "pos": [520, 460], "size": [150, 64] },
+    { "id": "memcache", "type": "database", "label": "Memory cache", "sublabel": "LRU · TTL 1h", "pos": [760, 160], "size": [150, 64] },
+    { "id": "sqlite", "type": "database", "label": "srga.db", "sublabel": "SQLite · WAL mode", "pos": [760, 300], "size": [150, 64] },
+    { "id": "public", "type": "external", "label": "Public URLs", "sublabel": "checked + imported", "pos": [760, 460], "size": [150, 64] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Container srga · scratch 10.1 MB", "wraps": ["api", "sitemap", "validator", "memcache", "sqlite"] },
+    { "kind": "security-group", "label": "X-API-Key gate", "wraps": ["api"] }
+  ],
+  "connections": [
+    { "id": "clients-to-api", "from": "clients", "to": "api", "label": "JSON + key", "variant": "emphasis" },
+    { "id": "api-to-sitemap", "from": "api", "to": "sitemap", "label": "generate" },
+    { "id": "api-to-validator", "from": "api", "to": "validator", "label": "validate" },
+    { "id": "sitemap-to-memcache", "from": "sitemap", "to": "memcache", "label": "read-through" },
+    { "id": "sitemap-to-sqlite", "from": "sitemap", "to": "sqlite", "label": "cache + history", "labelDy": 41, "labelDx": -28 },
+    { "id": "validator-to-sqlite", "from": "validator", "to": "sqlite", "label": "log history", "variant": "dashed" },
+    { "id": "validator-to-public", "from": "validator", "to": "public", "label": "HEAD, GET fallback", "labelDy": 56 }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Serve", "items": ["One static Go binary, no runtime", "Scratch image 10.1 MB, ~30 ms cold start"] },
+    { "dot": "emerald", "title": "Data", "items": ["Memory LRU backed by SQLite content-hash cache"] },
+    { "dot": "amber", "title": "Validate", "items": ["HEAD-first checks with GET fallback", "500 URLs per batch over a pool of 50"] }
+  ]
+}
